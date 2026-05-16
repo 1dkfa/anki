@@ -1,0 +1,71 @@
+name: Package upstream node_modules
+
+on:
+    schedule:
+        - cron: "20 * * * *"
+    workflow_dispatch:
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Get the latest Anki release tag
+              id: tag
+              run: |
+                  TAG=$(curl -s https://api.github.com/repos/ankitects/anki/releases/latest | jq -r .tag_name)
+                  echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+            - name: Checkout
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+
+            - name: Check if latest version is already built
+              id: check
+              run: |
+                  if git show-ref --tags --verify --quiet "refs/tags/${{ steps.tag.outputs.tag }}"; then
+                      echo "should_build=true" >> $GITHUB_OUTPUT
+                  else
+                      echo "should_build=false" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Clone latest release
+              if: steps.check.outputs.should_build != 'true'
+              run: |
+                  git clone --depth 1 --branch "${{ steps.tag.outputs.tag }}" \
+                  https://github.com/ankitects/anki.git
+
+            - name: Setup Node
+              if: steps.check.outputs.should_build != 'true'
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+
+            - name: Enable Corepack
+              if: steps.check.outputs.should_build != 'true'
+              run: corepack enable
+
+            - name: Install dependencies
+              if: steps.check.outputs.should_build != 'true'
+              working-directory: anki
+              run: yarn install --immutable
+
+            - name: Package node_modules
+              if: steps.check.outputs.should_build != 'true'
+              working-directory: anki
+              run: |
+                  tar -cJf "../anki-${{ steps.tag.outputs.tag }}-node_modules.tar.xz" \
+                      node_modules \
+                      yarn.lock
+
+            - name: Create release
+              if: steps.check.outputs.should_build != 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  gh release create \
+                    "${{ steps.tag.outputs.tag }}" \
+                    "anki-${{ steps.tag.outputs.tag }}-node_modules.tar.xz" \
+                    --repo "$GITHUB_REPOSITORY" \
+                    --title "${{ steps.tag.outputs.tag }}"
